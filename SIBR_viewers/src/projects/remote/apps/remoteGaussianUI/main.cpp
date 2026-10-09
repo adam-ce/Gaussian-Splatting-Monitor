@@ -155,9 +155,10 @@ int main(int ac, char** av) {
 	// Main looooooop.
 	while (window.isOpened()) 
 	{
-		if (!pathOverride && remoteView->sceneName() != "" && remoteView->sceneName() != currentName)
+		const std::string sceneName = remoteView->sceneName();
+		if (!pathOverride && !sceneName.empty() && sceneName != currentName)
 		{
-			currentName = remoteView->sceneName();
+			currentName = sceneName;
 			myArgs.dataset_path = currentName;
 			resetScene(myArgs, rendering_width, rendering_height, scene, remoteView, topView, multiViewManager);
 		}

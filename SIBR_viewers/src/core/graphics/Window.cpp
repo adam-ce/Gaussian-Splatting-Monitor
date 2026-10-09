@@ -25,6 +25,15 @@ namespace sibr
 {
 	int Window::contextId = -1;
 
+	static bool supportsWindowPosition()
+	{
+#ifdef GLFW_PLATFORM_WAYLAND
+		return glfwGetPlatform() != GLFW_PLATFORM_WAYLAND;
+#else
+		return true;
+#endif
+	}
+
 	static void glfwErrorCallback(int error, const char* description)
 	{
 		SIBR_ERR << description << std::endl;
@@ -171,7 +180,7 @@ namespace sibr
 		setup(w, h, title, args, defaultSettingsFilename);
 
 		if (!(args.fullscreen)) {
-			glfwSetWindowPos(_glfwWin.get(), 200, 200);
+			position(200, 200);
 		}
 	}
 
@@ -195,7 +204,7 @@ namespace sibr
 		setup(winSize.x() - 2*margins.x(), winSize.y() - 2*margins.y(), title, args, defaultSettingsFilename);
 
 		if (!(args.fullscreen)) {
-			glfwSetWindowPos(_glfwWin.get(), margins.x(), margins.y());
+			position(margins.x(), margins.y());
 		}
 
 	}
@@ -407,12 +416,17 @@ namespace sibr
 
 	void Window::position(const unsigned int x, const unsigned int y)
 	{
-		glfwSetWindowPos(_glfwWin.get(), x, y);
+		if (supportsWindowPosition()) {
+			glfwSetWindowPos(_glfwWin.get(), x, y);
+		}
 	}
 
 	Vector2i Window::position() const {
-		Vector2i s;
-		glfwGetWindowPos(_glfwWin.get(), &s[0], &s[1]);
+		// Wayland leaves global window placement to the compositor.
+		Vector2i s = Vector2i::Zero();
+		if (supportsWindowPosition()) {
+			glfwGetWindowPos(_glfwWin.get(), &s[0], &s[1]);
+		}
 		return s;
 	}
 

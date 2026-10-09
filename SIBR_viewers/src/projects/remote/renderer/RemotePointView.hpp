@@ -22,6 +22,7 @@
 # include <atomic>
 # include <mutex>
 # include <memory>
+# include <map>
 # include <core/graphics/Texture.hpp>
 #include <projects/remote/json.hpp>
 #include <thread>
@@ -67,6 +68,7 @@ namespace sibr {
 
 		std::string sceneName()
 		{
+			std::lock_guard<std::mutex> lock(_renderDataMutex);
 			return current_scene;
 		}
 
@@ -76,13 +78,13 @@ namespace sibr {
 
 		struct RemoteRenderInfo
 		{
-			Vector2i imgResolution;
-			float fovy;
-			float fovx;
-			float znear;
-			float zfar;
-			Matrix4f view;
-			Matrix4f viewProj;
+			Vector2i imgResolution = Vector2i::Zero();
+			float fovy = 0.0f;
+			float fovx = 0.0f;
+			float znear = 0.0f;
+			float zfar = 0.0f;
+			Matrix4f view = Matrix4f::Identity();
+			Matrix4f viewProj = Matrix4f::Identity();
 		};
 
 		RemoteRenderInfo _remoteInfo;
@@ -92,6 +94,7 @@ namespace sibr {
 		bool _showSfM = false;
 		int _item_current = 0;
 		std::vector<std::string> _renderItems;
+		std::map<std::string, double> _metrics;
 
 		float _scalingModifier = 1.0f;
 
@@ -107,13 +110,16 @@ namespace sibr {
 		bool _imageResize = true;
 		bool _imageDirty = true;
 		uint32_t _timestampRequested = 1;
-		uint32_t _timestampReceived = 0;
+		std::atomic<uint32_t> _timestampReceived{0};
 
+		// Controls, camera request, scene name, render items and metrics.
 		std::mutex _renderDataMutex;
+		// Completed frame pixels, dimensions and dirty flag.
 		std::mutex _imageDataMutex;
 
 		std::unique_ptr <std::thread> _networkThread;
 		std::vector<unsigned char> _imageData;
+		Vector2i _imageResolution = Vector2i::Zero();
 
 		std::shared_ptr<sibr::BasicIBRScene> _scene; ///< The current scene.
 		PointBasedRenderer::Ptr _pointbasedrenderer;

@@ -27,9 +27,6 @@ constexpr char* jScalingModifier = "scaling_modifier";
 constexpr char* jKeepAlive = "keep_alive";
 constexpr char* jRender = "render_mode";
 
-std::map<std::string, double> globalMetricsDict;
-
-
 void sibr::RemotePointView::set_render_items(boost::asio::ip::tcp::socket& sock) {
 			uint32_t data_length;
 			boost::system::error_code ec;
@@ -54,7 +51,8 @@ void sibr::RemotePointView::set_render_items(boost::asio::ip::tcp::socket& sock)
 			for (const auto& str : string_list) {
 				std::cout << str << std::endl; // Example operation
 			}
-			_renderItems = string_list;
+			std::lock_guard<std::mutex> lock(_renderDataMutex);
+			_renderItems = std::move(string_list);
 		}
 
 void sibr::RemotePointView::send_receive()
@@ -78,8 +76,12 @@ void sibr::RemotePointView::send_receive()
 
 			SIBR_LOG << "Connected!" << std::endl;
 			set_render_items(sock);
+			std::vector<unsigned char> imageData;
 			while (keep_running)
 			{
+				std::string message;
+				Vector2i requestedResolution;
+				uint32_t requestedTimestamp;
 				{
 					std::lock_guard<std::mutex> lg(_renderDataMutex);
 
@@ -98,22 +100,25 @@ void sibr::RemotePointView::send_receive()
 					sendData[jViewProjMat] = std::vector<float>((float*)&_remoteInfo.viewProj, ((float*)&_remoteInfo.viewProj) + 16);
                     sendData[jRender] = _item_current;
 
-					std::string message = sendData.dump();
-					uint32_t messageLength = message.size();
-					boost::asio::write(sock, boost::asio::buffer(&messageLength, sizeof(uint32_t)));
-					boost::asio::write(sock, boost::asio::buffer(message.c_str(), messageLength));
+					message = sendData.dump();
+					requestedResolution = _remoteInfo.imgResolution;
+					requestedTimestamp = _timestampRequested;
 				}
 
-				uint32_t bytes_to_receive = _remoteInfo.imgResolution.x() * _remoteInfo.imgResolution.y() * 3;
+				uint32_t messageLength = message.size();
+				boost::asio::write(sock, boost::asio::buffer(&messageLength, sizeof(uint32_t)));
+				boost::asio::write(sock, boost::asio::buffer(message.c_str(), messageLength));
+
+				// The reply belongs to this request, even if the UI resized meanwhile.
+				size_t bytes_to_receive = size_t(requestedResolution.x()) * requestedResolution.y() * 3;
 				if (bytes_to_receive > 0)
 				{
+					imageData.resize(bytes_to_receive);
+					boost::asio::read(sock, boost::asio::buffer(imageData));
 					std::lock_guard<std::mutex> ilg(_imageDataMutex);
-					_imageData.resize(bytes_to_receive);
-					boost::asio::read(sock, boost::asio::buffer(_imageData.data(), _imageData.size()));
-					{
-						std::lock_guard<std::mutex> lg(_renderDataMutex);
-						_timestampReceived = _timestampRequested;
-					}
+					_imageData.swap(imageData);
+					_imageResolution = requestedResolution;
+					_timestampReceived = requestedTimestamp;
 					_imageDirty = true;
 				}
 				uint32_t sceneLength;
@@ -121,7 +126,6 @@ void sibr::RemotePointView::send_receive()
 				std::vector<char> sceneName(sceneLength);
 				boost::asio::read(sock, boost::asio::buffer(sceneName.data(), sceneLength));
 				sceneName.push_back(0);
-				current_scene = std::string(sceneName.data());
 
 				uint32_t data_length;
 				boost::system::error_code ec;
@@ -138,7 +142,11 @@ void sibr::RemotePointView::send_receive()
 				}
 				// Deserialize the data to get the dictionary
 				json deserialized_data = json::parse(serialized_data.begin(), serialized_data.end());
-				globalMetricsDict = deserialized_data.get<std::map<std::string, double>>();
+				{
+					std::lock_guard<std::mutex> lock(_renderDataMutex);
+					current_scene = std::string(sceneName.data());
+					_metrics = deserialized_data.get<std::map<std::string, double>>();
+				}
 				// Now you can do operations with metrics_dict
 				// for (const auto& pair : globalMetricsDict) {
 				// 	std::cout << pair.first << ": " << pair.second << std::endl; // Example operation
@@ -222,7 +230,7 @@ void sibr::RemotePointView::onRenderIBR(sibr::IRenderTarget & dst, const sibr::C
 				glBindTexture(GL_TEXTURE_2D, 0);
 				_imageResize = false;
 			}
-			if (_imageDirty && _imageData.size() == 3 * _resolution.x() * _resolution.y())
+			if (_imageDirty && _imageResolution == _resolution)
 			{
 				glTextureSubImage2D(_imageTexture, 0, 0, 0, _resolution.x(), _resolution.y(), GL_RGB, GL_UNSIGNED_BYTE, _imageData.data());
 				_imageDirty = false;
@@ -234,6 +242,11 @@ void sibr::RemotePointView::onRenderIBR(sibr::IRenderTarget & dst, const sibr::C
 
 void sibr::RemotePointView::onGUI()
 {
+	std::lock_guard<std::mutex> lock(_renderDataMutex);
+	if (_item_current >= int(_renderItems.size())) {
+		_item_current = 0;
+		_showSfM = false;
+	}
 	const std::string guiName = "Remote Viewer Settings (" + name() + ")";
 	if (ImGui::Begin(guiName.c_str())) 
 	{
@@ -263,7 +276,7 @@ void sibr::RemotePointView::onGUI()
 
 		ImGui::Dummy(ImVec2(0.0f, 10.0f));
         ImGui::Text("Live Performance Metrics");
-        for (const auto& pair : globalMetricsDict) {
+        for (const auto& pair : _metrics) {
             ImGui::Text("%s: %.3f", pair.first.c_str(), pair.second);
         }
 	}
